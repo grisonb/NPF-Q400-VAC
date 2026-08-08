@@ -1,6 +1,8 @@
 name: Synchroniser VAC SIA
 
 on:
+  schedule:
+    - cron: "17 4 * * *"
   workflow_dispatch:
     inputs:
       force:
