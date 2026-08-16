@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "source": "SIA / AIP Atlas VAC",
   "sourceCycle": "06_AUG_2026",
-  "generatedAt": "2026-08-08T15:57:16.417062Z",
+  "generatedAt": "2026-08-16T14:32:27.234860Z",
   "npfReference": "TEST v14.92",
   "scope": {
     "pelicandromesPermanents": 27,
@@ -12,8 +12,8 @@
   "stats": {
     "availableVac": 108,
     "unavailableVac": 15,
-    "totalSizeBytes": 48126658,
-    "changedFilesThisSync": 108
+    "totalSizeBytes": 48309727,
+    "changedFilesThisSync": 1
   },
   "airports": {
     "LFAQ": {
@@ -313,6 +313,19 @@
       "source": "SIA",
       "sourceStableUrl": "https://www.sia.aviation-civile.gouv.fr/documents/download/f/d/15066339/",
       "sourceFinalUrl": "https://www.sia.aviation-civile.gouv.fr/media/dvd/eAIP_06_AUG_2026/Atlas-VAC/PDF_AIPparSSection/VAC/AD/AD-2.LFGA.pdf"
+    },
+    "LFGJ": {
+      "name": "Dole-Tavaux",
+      "npfType": "pelicandrome_permanent",
+      "available": true,
+      "status": "current",
+      "file": "vac/LFGJ.pdf",
+      "size": 358502,
+      "sha256": "460c43ce05673c18f472c328e28b6a858b8b31c0afe7986fc9097225cfe36eab",
+      "cycle": "06_AUG_2026",
+      "source": "SIA",
+      "sourceStableUrl": "https://www.sia.aviation-civile.gouv.fr/documents/download/f/d/15066347/",
+      "sourceFinalUrl": "https://www.sia.aviation-civile.gouv.fr/media/dvd/eAIP_06_AUG_2026/Atlas-VAC/PDF_AIPparSSection/VAC/AD/AD-2.LFGJ.pdf"
     },
     "LFHO": {
       "name": "Aubenas-Ardèche Méridionale",
@@ -1388,19 +1401,6 @@
       "npfType": "aerodrome_selectionnable",
       "available": false,
       "status": "not_published_by_sia"
-    },
-    "LFSJ": {
-      "name": "Dole-Tavaux",
-      "npfType": "pelicandrome_permanent",
-      "available": true,
-      "status": "current",
-      "file": "vac/LFSJ.pdf",
-      "size": 175433,
-      "sha256": "17c83cb0e4f607e336962e05bb593d6d8054327581444fbf5f8aa463669b6e28",
-      "cycle": "06_AUG_2026",
-      "source": "SIA",
-      "sourceStableUrl": "https://www.sia.aviation-civile.gouv.fr/documents/download/f/d/15066594/",
-      "sourceFinalUrl": "https://www.sia.aviation-civile.gouv.fr/media/dvd/eAIP_06_AUG_2026/Atlas-VAC/PDF_AIPparSSection/VAC/AD/AD-2.LFSJ.pdf"
     },
     "LFSK": {
       "name": "Colmar-Houssen",
