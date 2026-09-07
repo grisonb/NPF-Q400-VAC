@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "source": "SIA / AIP Atlas VAC",
   "sourceCycle": "03_SEP_2026",
-  "generatedAt": "2026-09-04T14:41:11.801416Z",
+  "generatedAt": "2026-09-07T13:34:59.859366Z",
   "npfReference": "NPF-Q400 v16.50",
   "scope": {
     "pelicandromesPermanents": 27,
@@ -14,7 +14,7 @@
     "availableVac": 415,
     "unavailableVac": 31,
     "totalSizeBytes": 124498501,
-    "changedFilesThisSync": 307
+    "changedFilesThisSync": 0
   },
   "airports": {
     "LFAB": {
