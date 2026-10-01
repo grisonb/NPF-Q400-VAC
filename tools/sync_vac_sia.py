@@ -11,7 +11,12 @@ Périmètre NPF v16.50 :
 Sélection SIA stricte :
 - libellé exact : AIP - AD-2.LFXX.pdf
 - catégorie exacte : AIP Atlas VAC
-- aucun SUP AIP ni autre document associé au terrain
+- aucun SUP AIP ni autre document associé au terrain (ADC, AOC, APDC, IAC... de
+  la catégorie "AIP FRANCE" sont ignorés)
+- depuis le cycle 01_OCT_2026, la recherche SIA renvoie aussi toutes les cartes eAIP
+  du terrain : la VAC est souvent en dernière page. Toutes les pages de l'onglet
+  "Information aéronautique" sont donc lues (page 1, puis de la dernière vers la 2e),
+  et l'absence de VAC n'est retenue qu'après lecture complète et cohérente des pages.
 
 Principes de sécurité :
 - la synchronisation travaille d'abord en mémoire / fichiers temporaires ;
@@ -20,7 +25,10 @@ Principes de sécurité :
 - une ancienne VAC déjà publiée n'est jamais supprimée automatiquement ;
 - si une VAC n'est plus publiée par le SIA, le fichier historique peut rester sur GitHub
   mais le manifeste la marque indisponible afin que NPF ne l'affiche plus ;
-- les mises à jour applicatives compareront les SHA-256.
+- les mises à jour applicatives compareront les SHA-256 ;
+- si une VAC disponible dans le manifeste actuel n'est plus trouvée sur le site du SIA,
+  rien n'est publié et le script échoue après avoir contrôlé les 446 terrains, sauf
+  --accept-removals (case "accepter les retraits" du workflow).
 
 Optimisation :
 - un cycle témoin est résolu via LFBD ;
@@ -54,10 +62,16 @@ SIA = "https://www.sia.aviation-civile.gouv.fr"
 TARGET_CATEGORY = "AIP Atlas VAC"
 SENTINEL_ICAO = "LFBD"
 
+RESULTS_TAB_ID = "document.result.tab1"
+RESULTS_TAB_LABEL = "Information aéronautique"
+RESULTS_PAGE_SIZE = 10
+MAX_RESULT_PAGES = 40
+HTTP_ATTEMPTS = 3
+
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Safari/537.36 "
-    "NPF-Q400-VAC-sync/1.1"
+    "NPF-Q400-VAC-sync/1.2"
 )
 
 BASE_HEADERS = {
@@ -562,8 +576,11 @@ def target_label(icao: str) -> str:
     return f"AIP - AD-2.{icao}.pdf"
 
 
-def search_url(icao: str) -> str:
-    return f"{SIA}/catalogsearch/result/?c=8&format=pdf&q={icao}"
+def search_url(icao: str, page: int = 1) -> str:
+    return (
+        f"{SIA}/catalogsearch/result/index/q/{icao}/"
+        f"?c=8&format=pdf&page={page}&q={icao}"
+    )
 
 
 def extract_cycle(final_url: str) -> str:
@@ -582,6 +599,83 @@ def load_existing_manifest(repo_root: Path) -> dict:
         return {}
 
 
+def http_get_with_retry(url: str, **kwargs) -> requests.Response:
+    s = get_session()
+    for attempt in range(1, HTTP_ATTEMPTS + 1):
+        try:
+            r = s.get(url, **kwargs)
+            if r.status_code >= 500 and attempt < HTTP_ATTEMPTS:
+                r.close()
+                time.sleep(2 * attempt)
+                continue
+            r.raise_for_status()
+            return r
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == HTTP_ATTEMPTS:
+                raise
+            time.sleep(2 * attempt)
+    raise RuntimeError(f"Échec HTTP après {HTTP_ATTEMPTS} tentatives : {url}")
+
+
+def fetch_catalog_page(icao: str, page: int) -> dict:
+    """Lit une page de l'onglet "Information aéronautique" et contrôle sa cohérence."""
+    r = http_get_with_retry(
+        search_url(icao, page),
+        headers={**BASE_HEADERS, "Accept": "text/html,*/*;q=0.8"},
+        timeout=(12, 35),
+        allow_redirects=True,
+    )
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    tab_label = soup.find(id=f"tab-label-{RESULTS_TAB_ID}")
+    tab = soup.find(id=RESULTS_TAB_ID)
+    label_text = clean_text(tab_label.get_text(" ", strip=True)) if tab_label else ""
+    if tab is None or not label_text.startswith(RESULTS_TAB_LABEL):
+        raise RuntimeError(
+            f"page {page} : onglet '{RESULTS_TAB_LABEL}' introuvable (structure SIA modifiée ?)"
+        )
+
+    docs = []
+    for row in tab.select("tr.tr_ligne_document"):
+        row_text = clean_text(row.get_text(" ", strip=True))
+        links = [
+            a for a in row.find_all("a", href=True)
+            if "/documents/download/" in a["href"]
+        ]
+        if len(links) != 1:
+            raise RuntimeError(f"page {page} : ligne de document inattendue : {row_text!r}")
+        label = clean_text(links[0].get_text(" ", strip=True))
+        category = row_text[len(label):].strip() if row_text.startswith(label) else row_text
+        docs.append({
+            "label": label,
+            "category": category,
+            "url": urljoin(r.url, links[0]["href"]),
+        })
+
+    amount = tab.select_one(".toolbar-amount")
+    amount_text = clean_text(amount.get_text(" ", strip=True)) if amount else ""
+    m_multi = re.fullmatch(r"Résultats (\d+) à (\d+) sur (\d+)", amount_text)
+    m_single = re.fullmatch(r"(\d+) résultats?", amount_text)
+    if m_multi:
+        first, last, total = (int(x) for x in m_multi.groups())
+    elif m_single:
+        total = int(m_single.group(1))
+        first, last = (1, total) if total else (0, 0)
+    elif not amount and not docs and label_text == f"{RESULTS_TAB_LABEL} (0)":
+        first, last, total = 0, 0, 0
+    else:
+        raise RuntimeError(
+            f"page {page} : compteur de résultats illisible : {amount_text!r} / {label_text!r}"
+        )
+
+    if len(docs) != (last - first + 1 if total else 0):
+        raise RuntimeError(
+            f"page {page} : {len(docs)} documents lus pour l'intervalle {first}-{last}"
+        )
+
+    return {"page": page, "first": first, "last": last, "total": total, "docs": docs}
+
+
 def resolve_exact_vac(airport: dict) -> dict:
     icao = airport["oaci"]
     expected_label = target_label(icao)
@@ -593,39 +687,60 @@ def resolve_exact_vac(airport: dict) -> dict:
         "search_http": None,
         "stable_url": "",
         "resolve_error": "",
+        "catalog_total": None,
+        "catalog_pages_read": 0,
     }
 
-    s = get_session()
     try:
-        r = s.get(
-            search_url(icao),
-            headers={**BASE_HEADERS, "Accept": "text/html,*/*;q=0.8"},
-            timeout=(12, 35),
-            allow_redirects=True,
-        )
-        result["search_http"] = r.status_code
-        r.raise_for_status()
+        first_page = fetch_catalog_page(icao, 1)
+        result["search_http"] = 200
+        total = first_page["total"]
+        result["catalog_total"] = total
+        page_count = max(1, -(-total // RESULTS_PAGE_SIZE))
+        if page_count > MAX_RESULT_PAGES:
+            raise RuntimeError(f"{total} résultats : trop de pages ({page_count})")
 
-        soup = BeautifulSoup(r.text, "html.parser")
-        rows = soup.select("tr.tr_ligne_document")
-        if not rows:
-            rows = soup.find_all("tr")
+        # La catégorie Atlas VAC est classée en fin de résultats : page 1 puis
+        # de la dernière page vers la 2e, arrêt dès que la VAC est trouvée.
+        docs_read = 0
+        for page_no in [1] + list(range(page_count, 1, -1)):
+            page = first_page if page_no == 1 else fetch_catalog_page(icao, page_no)
+            result["catalog_pages_read"] += 1
 
-        for row in rows:
-            row_text = clean_text(row.get_text(" ", strip=True))
-            if TARGET_CATEGORY not in row_text:
-                continue
-            for link in row.find_all("a", href=True):
-                label = clean_text(link.get_text(" ", strip=True))
-                if label == expected_label:
-                    result["stable_url"] = urljoin(r.url, link["href"])
-                    result["status"] = "found"
-                    return result
+            expected_first = (page_no - 1) * RESULTS_PAGE_SIZE + 1 if total else 0
+            expected_last = min(page_no * RESULTS_PAGE_SIZE, total)
+            if (page["total"], page["first"], page["last"]) != (
+                total, expected_first, expected_last
+            ):
+                raise RuntimeError(
+                    f"pagination incohérente page {page_no} : "
+                    f"{page['first']}-{page['last']} sur {page['total']}, "
+                    f"attendu {expected_first}-{expected_last} sur {total}"
+                )
+            docs_read += len(page["docs"])
+
+            matches = {
+                d["url"] for d in page["docs"]
+                if d["label"] == expected_label and d["category"] == TARGET_CATEGORY
+            }
+            if len(matches) > 1:
+                raise RuntimeError(
+                    f"plusieurs documents '{expected_label}' en {TARGET_CATEGORY} : "
+                    + ", ".join(sorted(matches))
+                )
+            if matches:
+                result["stable_url"] = matches.pop()
+                result["status"] = "found"
+                return result
+
+        if docs_read != total:
+            raise RuntimeError(f"{docs_read} documents lus sur {total} annoncés")
 
         result["status"] = "no_vac"
         return result
 
     except Exception as exc:
+        result["status"] = "error"
         result["resolve_error"] = f"{type(exc).__name__}: {exc}"
         return result
 
@@ -821,6 +936,11 @@ def main() -> int:
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--accept-removals",
+        action="store_true",
+        help="Publier même si des VAC disponibles dans le manifeste ont disparu du SIA",
+    )
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
@@ -847,6 +967,7 @@ def main() -> int:
     print(f"Ancien périmètre : {existing_total or 'inconnu'}")
     print(f"Périmètre à reconstruire : {scope_changed}")
     print(f"Mode force : {args.force}")
+    print(f"Retraits acceptés : {args.accept_removals}")
 
     try:
         current_cycle, sentinel_stable, sentinel_final = get_current_cycle_from_sentinel()
@@ -944,6 +1065,56 @@ def main() -> int:
         )
         return 3
 
+    existing_airports = existing_manifest.get("airports", {})
+    if not isinstance(existing_airports, dict):
+        existing_airports = {}
+
+    removed_rows = sorted(
+        (
+            r for r in resolved_rows
+            if r["status"] == "no_vac"
+            and isinstance(existing_airports.get(r["oaci"]), dict)
+            and existing_airports[r["oaci"]].get("available") is True
+        ),
+        key=lambda r: r["oaci"],
+    )
+    removed_labels = [f"{r['oaci']} ({r['name']})" for r in removed_rows]
+    if removed_rows:
+        print(f"VAC disparues du site du SIA : {', '.join(removed_labels)}")
+
+    if removed_rows and not args.accept_removals:
+        lines = [
+            f"❌ VAC disparue(s) sur le site du SIA : {', '.join(removed_labels)}. "
+            "Rien n'a été publié. Vérifier puis relancer avec "
+            "« accepter les retraits » coché.",
+            "",
+            "# Synchronisation VAC SIA",
+            "",
+            f"- Cycle SIA détecté : **{current_cycle}**",
+            f"- Cycle publié conservé : **{existing_cycle or 'aucun'}**",
+            f"- Terrains contrôlés : **{TOTAL_AIRPORTS}**",
+            f"- VAC trouvées : **{sum(1 for r in resolved_rows if r['status'] == 'found')}**",
+            f"- VAC disparues : **{len(removed_rows)}**",
+            "",
+            "## VAC disparues",
+            "",
+        ] + [f"- {label}" for label in removed_labels]
+        write_report(
+            report_dir,
+            lines,
+            {
+                "success": False,
+                "stage": "removed_vac",
+                "sourceCycle": current_cycle,
+                "publishedCycle": existing_cycle,
+                "removedVac": [
+                    {"oaci": r["oaci"], "name": r["name"]} for r in removed_rows
+                ],
+            },
+        )
+        print(lines[0])
+        return 5
+
     found_rows = [r for r in resolved_rows if r["status"] == "found"]
 
     with tempfile.TemporaryDirectory(prefix="npf-vac-sync-") as tmp_name:
@@ -997,10 +1168,6 @@ def main() -> int:
                 rows.append(validated[row["oaci"]])
             else:
                 rows.append(download_and_validate(row, temp_dir))
-
-        existing_airports = existing_manifest.get("airports", {})
-        if not isinstance(existing_airports, dict):
-            existing_airports = {}
 
         changed_files = []
         unchanged_files = []
@@ -1064,6 +1231,10 @@ def main() -> int:
         "## Terrains sans VAC Atlas VAC",
         "",
         ", ".join(no_vac) if no_vac else "Aucun.",
+        "",
+        "## VAC retirées (retraits acceptés)",
+        "",
+        ", ".join(removed_labels) if removed_labels else "Aucune.",
     ]
 
     write_report(
@@ -1078,6 +1249,7 @@ def main() -> int:
             "changedFiles": changed_files,
             "unchangedFiles": unchanged_files,
             "noVac": no_vac,
+            "removedVac": [r["oaci"] for r in removed_rows],
             "availableVac": manifest["stats"]["availableVac"],
             "totalSizeBytes": total_size,
             "elapsedSeconds": round(elapsed, 2),

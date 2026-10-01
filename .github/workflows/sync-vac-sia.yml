@@ -10,6 +10,11 @@ on:
         required: false
         type: boolean
         default: false
+      accepter_retraits:
+        description: "accepter les retraits (publier même si des VAC ont disparu du site du SIA)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -21,7 +26,7 @@ concurrency:
 jobs:
   sync-vac:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Récupérer le dépôt
@@ -42,7 +47,11 @@ jobs:
           if [ "${{ github.event.inputs.force }}" = "true" ]; then
             FORCE_ARG="--force"
           fi
-          python tools/sync_vac_sia.py --repo-root . --workers 4 $FORCE_ARG
+          RETRAITS_ARG=""
+          if [ "${{ github.event.inputs.accepter_retraits }}" = "true" ]; then
+            RETRAITS_ARG="--accept-removals"
+          fi
+          python tools/sync_vac_sia.py --repo-root . --workers 4 $FORCE_ARG $RETRAITS_ARG
 
       - name: Ajouter le résumé au workflow
         if: always()
